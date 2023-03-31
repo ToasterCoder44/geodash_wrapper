@@ -39,9 +39,9 @@ impl<'de, R: Read> Deserializer<'de, R> {
         let reader = XorReader::new(vec![11], reader);
         let reader = Base64Reader::new(reader, &URL_SAFE);
         let reader = if let Ok(reader) = GzipReader::new(reader) { reader }
-        else { return Err(DeError::Parse); };
+        else { return Err(DeError::Read); };
         let reader = XmlReader::from_reader(BufReader::new(reader));
-        //todo!();
+
         Ok(Self {
             reader,
             buffer: vec![],
@@ -69,6 +69,9 @@ pub fn from_file<'de, P: AsRef<Path>>(path: P) -> DeResult<Deserializer<'de, Fil
 
 #[derive(Debug)]
 enum Event {
+    XmlVersion(String),
+    PlistVersion(String),
+    GjVersion(String),
     DictStart,
     DictEnd,
     Key(String),
@@ -113,35 +116,64 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                     match event {
                         XmlEvent::Decl(decl) => {
                             // if let Ok(version) = decl.version() {
-                            //     if version == Cow::Borrowed(b"1.0") { continue; }
+                            //     if let Ok(version) = String::from_utf8(version.to_vec()) {
+                            //         save_next_peek!(self, Event::XmlVersion(version))
+                            //     }
                             // }
-                            // return Err(Error::UnexpectedXml);
-
-                            // TODO: Check versions, eventually deserialize to @something
+                            // return Err(DeError::UnexpectedXml);
                         }
                         XmlEvent::Start(tag) => {
                             if let PreEvent::None = expect {
                                 match tag.name().into_inner() {
                                     b"plist" => {
-                                        // Check versions
+                                        // for attr in tag.attributes() {
+                                        //     match attr {
+                                        //         Ok(attr) => {
+                                        //             match attr.key.into_inner() {
+                                        //                 b"version" => {
+                                        //                     match attr.unescape_value() {
+                                        //                         Ok(attr) => {
+                                        //                             save_next_peek!(self, Event::PlistVersion(attr.to_string()))
+                                        //                         }
+                                        //                         Err(err) => {
+                                        //                             return Err(DeError::XmlParse(err))
+                                        //                         }
+                                        //                     }
+                                        //                 }
+                                        //                 b"gjver" => {
+                                        //                     match attr.unescape_value() {
+                                        //                         Ok(attr) => {
+                                        //                             save_next_peek!(self, Event::GjVersion(attr.to_string()))
+                                        //                         }
+                                        //                         Err(err) => {
+                                        //                             return Err(DeError::XmlParse(err))
+                                        //                         }
+                                        //                     }
+                                        //                 }
+                                        //                 _ => { return Err(DeError::UnexpectedXml) }
+                                        //             }
+                                        //         }
+                                        //         Err(err) => { return Err(DeError::UnexpectedXml /* ?? */) }
+                                        //     }
+                                        // }
                                     }
                                     b"d" | b"dict" => { save_next_peek!(self, Event::DictStart) }
                                     b"k" => { expect = PreEvent::Key }
                                     b"s" => { expect = PreEvent::String }
                                     b"i" => { expect = PreEvent::Integer }
                                     b"r" => { expect = PreEvent::Real }
-                                    _ => { return Err(DeError::UnexpectedXml) }
+                                    _ => { return Err(DeError::UnknownXmlTag) }
                                 }
-                            } else { return Err(DeError::UnexpectedXml) }
+                            } else { return Err(DeError::UnexpectedXmlTag) }
                         }
                         XmlEvent::End(tag) => {
                             if let PreEvent::None = expect {
                                 match tag.name().into_inner() {
                                     b"plist" | b"k" | b"s" | b"i" | b"r" => {}
                                     b"d" | b"dict" => { save_next_peek!(self, Event::DictEnd) }
-                                    _ => { return Err(DeError::UnexpectedXml) }
+                                    _ => { return Err(DeError::UnknownXmlTag) }
                                 }
-                            } else { return Err(DeError::UnexpectedXml) }
+                            } else { return Err(DeError::UnexpectedXmlTag) }
                         }
                         XmlEvent::Empty(tag) => {
                             if let PreEvent::None = expect {
@@ -151,32 +183,35 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                                         save_next_peek!(self, Event::DictStart);
                                     }
                                     b"t" => { save_next_peek!(self, Event::True) }
-                                    _ => { return Err(DeError::UnexpectedXml) }
+                                    _ => { return Err(DeError::UnknownXmlTag) }
                                 }
-                            } else { return Err(DeError::UnexpectedXml); }
+                            } else { return Err(DeError::UnexpectedXmlTag); }
                         }
                         XmlEvent::Text(text) => {
-                            if let PreEvent::None = expect { return Err(DeError::UnexpectedXml) }
-                            else if let Ok(text) = text.unescape() {                                
-                                match expect {
-                                    PreEvent::None => { unreachable!() }
-                                    PreEvent::Key => {
-                                        save_next_peek!(self, Event::Key(text.to_string()))
+                            if let PreEvent::None = expect { return Err(DeError::UnexpectedXmlText) }
+                            else {
+                                match text.unescape() {
+                                    Ok(text) => match expect {
+                                        PreEvent::None => { unreachable!() }
+                                        PreEvent::Key => {
+                                            save_next_peek!(self, Event::Key(text.to_string()))
+                                        }
+                                        PreEvent::String => {
+                                            save_next_peek!(self, Event::String(text.to_string()))
+                                        }
+                                        PreEvent::Integer => {
+                                            save_next_peek!(self, Event::Integer(text.to_string()))
+                                        }
+                                        PreEvent::Real => {
+                                            save_next_peek!(self, Event::Real(text.to_string()))
+                                        }
                                     }
-                                    PreEvent::String => {
-                                        save_next_peek!(self, Event::String(text.to_string()))
-                                    }
-                                    PreEvent::Integer => {
-                                        save_next_peek!(self, Event::Integer(text.to_string()))
-                                    }
-                                    PreEvent::Real => {
-                                        save_next_peek!(self, Event::Real(text.to_string()))
-                                    }
+                                    Err(err) => { return Err(DeError::XmlParse(err)) }
                                 }
-                            } else { return Err(DeError::Parse); }
+                            }
                         }
                         XmlEvent::Eof => { save_next_peek!(self, Event::Eof) }
-                        _ => { return Err(DeError::UnexpectedXml) }
+                        _ => { return Err(DeError::UnexpectedOtherXml) }
                     }
                 }
                 Err(error) => { return Err(DeError::XmlParse(error)) }

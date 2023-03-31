@@ -8,9 +8,12 @@ pub type DeResult<T> = std::result::Result<T, DeError>;
 #[derive(Debug)]
 pub enum DeError { // todo: precisify
     Open,
-    Parse,
+    Read,
     XmlParse(XmlError),
-    UnexpectedXml,
+    UnexpectedOtherXml,
+    UnexpectedXmlTag,
+    UnexpectedXmlText,
+    UnknownXmlTag,
     Deserialization
 }
 
