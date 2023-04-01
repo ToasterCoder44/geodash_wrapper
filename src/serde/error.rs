@@ -1,7 +1,10 @@
 use std::fmt::{self, Display};
 use serde::{ser, de};
 
-use quick_xml::Error as XmlError;
+use quick_xml::{
+    Error as XmlError,
+    events::attributes::AttrError as XmlAttrError
+};
 
 pub type DeResult<T> = std::result::Result<T, DeError>;
 
@@ -10,10 +13,16 @@ pub enum DeError { // todo: precisify
     Open,
     Read,
     XmlParse(XmlError),
+    XmlAttrParse(XmlAttrError),
+    NoXmlVersionInfo,
     UnexpectedOtherXml,
     UnexpectedXmlTag,
     UnexpectedXmlText,
+    UnexpectedXmlAttr,
     UnknownXmlTag,
+    ExpectedXmlVersion,
+    ExpectedPlistVersion,
+    ExpectedGjVersion,
     ExpectedEof,
     Deserialization
 }

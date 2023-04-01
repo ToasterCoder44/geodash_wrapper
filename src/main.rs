@@ -17,8 +17,11 @@ fn main() {
     // Showing content of CCLocalLevels.dat just to show effects of deserializing
     // It'll be replaced with unit/integrated tests later when the project grew
 
-    let ldb: LocalLevelsDB = gd_serde::from_reader(file1).unwrap();
-    print!("{ldb:#?}");
-    let gdb: GameManagerDB = gd_serde::from_reader(file2).unwrap();
-    print!("{gdb:#?}");
+    let mut x = gd_serde::de::Deserializer::from_reader(file1).unwrap();
+    x._test();
+
+    // let ldb: LocalLevelsDB = gd_serde::from_reader(file1).unwrap();
+    // print!("{ldb:#?}");
+    let gdb: gd_serde::de::DataWithHeader<GameManagerDB> = gd_serde::from_reader(file2).unwrap();
+    print!("{:#?}", gdb);
 }
