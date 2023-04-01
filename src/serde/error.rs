@@ -14,6 +14,7 @@ pub enum DeError { // todo: precisify
     UnexpectedXmlTag,
     UnexpectedXmlText,
     UnknownXmlTag,
+    ExpectedEof,
     Deserialization
 }
 

@@ -1,5 +1,13 @@
-use std::{path::Path, fs::File, io::{Read, BufReader}, rc::Rc};
-use serde::{de::{self, MapAccess, SeqAccess}, serde_if_integer128};
+use std::{
+    path::Path,
+    fs::File,
+    io::{Read, BufReader},
+    rc::Rc
+};
+use serde::{
+    de::{self, MapAccess, SeqAccess},
+    serde_if_integer128
+};
 
 use xorstream::Transformer as XorReader;
 use base64::read::DecoderReader as Base64Reader;
@@ -59,12 +67,22 @@ impl<'de> Deserializer<'de, File> {
     }
 }
 
-pub fn from_reader<'de, R: Read>(reader: R) -> DeResult<Deserializer<'de, R>> {
-    Deserializer::from_reader(reader)
+pub fn from_reader<'de, T, R: Read>(reader: R) -> DeResult<T>
+where T: de::Deserialize<'de> {
+    let mut deserializer = Deserializer::from_reader(reader)?;
+    let result = T::deserialize(&mut deserializer)?;
+    if let Ok(event) = deserializer.next() {
+        if let Event::Eof = *event { Ok(result) }
+        else { Err(DeError::ExpectedEof) }
+    }
+    else { Err(DeError::ExpectedEof) }
 }
 
-pub fn from_file<'de, P: AsRef<Path>>(path: P) -> DeResult<Deserializer<'de, File>> {
-    Deserializer::from_file(path)
+pub fn from_file<'de, T, P: AsRef<Path>>(path: P) -> DeResult<T>
+where T: de::Deserialize<'de> {
+    let mut deserializer = Deserializer::from_file(path)?;
+    let result = T::deserialize(&mut deserializer)?;
+    Ok(result)
 }
 
 #[derive(Debug)]
