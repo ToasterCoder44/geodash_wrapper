@@ -4,8 +4,6 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LocalLevelsDB {
-    #[serde(rename = "@xmlVersion")]
-    xml_version: String,
     #[serde(rename = "LLM_01")]
     local_levels: Vec<Level>,
     #[serde(rename = "LLM_02")]

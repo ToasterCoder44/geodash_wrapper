@@ -308,19 +308,6 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
             Ok(peeked)
         } else { unreachable!() }
     }
-
-    pub fn _test(&'a mut self) {
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-        println!("{:?}", self.next().unwrap());
-    }
 }
 
 macro_rules! deserialize_type {
@@ -329,9 +316,6 @@ macro_rules! deserialize_type {
         where V: de::Visitor<'de> {
             self.skip_header()?;
             match &*self.next()? {
-                Event::XmlVersion(text) |
-                // Event::PlistVersion(text) |
-                // Event::GjVersion(text) |
                 Event::String(text) |
                 Event::Key(text) |
                 Event::Integer(text) |
@@ -363,9 +347,6 @@ impl<'a, 'de, R: Read> MapAccess<'de> for DictReader<'a, 'de, R> {
     where K: de::DeserializeSeed<'de> {
         match self.de.peek()? {
             Event::DictEnd => Ok(None),
-            Event::XmlVersion(_) |
-            // Event::PlistVersion(_) |
-            // Event::GjVersion(_) |
             Event::Key(_) => Ok(Some(seed.deserialize(&mut *self.de)?)),
             _ => Err(DeError::Deserialization)
         }
@@ -374,9 +355,6 @@ impl<'a, 'de, R: Read> MapAccess<'de> for DictReader<'a, 'de, R> {
     fn next_value_seed<V>(&mut self, seed: V) -> DeResult<V::Value>
     where V: de::DeserializeSeed<'de> {
         match self.de.peek()? {
-            Event::XmlVersion(_) |
-            // Event::PlistVersion(_) |
-            // Event::GjVersion(_) |
             Event::DictStart |
             Event::String(_) |
             Event::Integer(_) |
@@ -474,7 +452,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
                     Event::DictEnd => self.deserialize_map_content(visitor),
                     _ => Err(DeError::Deserialization)
                 }
-                //self.deserialize_map(visitor)
             }
             Event::String(_) => self.deserialize_str(visitor),
             Event::Key(_) => self.deserialize_str(visitor),
@@ -523,9 +500,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
     where V: de::Visitor<'de> {
         self.skip_header()?;
         match &*self.next()? {
-            Event::XmlVersion(text) |
-            // Event::PlistVersion(text) |
-            // Event::GjVersion(text) |
             Event::String(text) |
             Event::Key(text) |
             Event::Integer(text) |
@@ -616,11 +590,9 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
     fn deserialize_map<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
         self.skip_header()?;
-        match *self.next()? {
-            Event::DictStart => self.deserialize_map_content(visitor),
-            //Event::XmlVersion(_) => ,
-            _ => Err(DeError::Deserialization)
-        }
+        if let Event::DictStart = *self.next()? {
+            self.deserialize_map_content(visitor)
+        } else { Err(DeError::Deserialization) }
     }
 
     fn deserialize_struct<V>(
@@ -648,12 +620,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
     fn deserialize_identifier<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
         self.skip_header()?;
-        match *self.peek()? {
-            Event::XmlVersion(_) => visitor.visit_str("@xmlVersion"),
-            // Event::PlistVersion(_) => visitor.visit_str("@plistVersion"),
-            // Event::GjVersion(_) => visitor.visit_str("@gjVersion"),
-            _ => self.deserialize_str(visitor)
-        }
+        self.deserialize_str(visitor)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> DeResult<V::Value>
