@@ -53,7 +53,6 @@ pub struct Deserializer<'de, R: Read> {
     buffer: Vec<u8>,
     header: Header,
     peeked_next: Option<Rc<Event>>,
-    is_plist_started: bool,
     is_instant_dict_end: bool
 }
 
@@ -74,7 +73,6 @@ impl<'de, R: Read> Deserializer<'de, R> {
                 gj_version: String::new()
             },
             peeked_next: None,
-            is_plist_started: false,
             is_instant_dict_end: false
         })
     }
@@ -91,6 +89,7 @@ impl<'de> Deserializer<'de, File> {
 pub fn from_reader<'de, T, R: Read>(reader: R) -> DeResult<DataWithHeader<T>>
 where T: de::Deserialize<'de> {
     let mut deserializer = Deserializer::from_reader(reader)?;
+    deserializer.skip_header()?;
     let result = T::deserialize(&mut deserializer)?;
     if let Ok(event) = deserializer.next() {
         if let Event::Eof = *event {
@@ -106,6 +105,7 @@ where T: de::Deserialize<'de> {
 pub fn from_file<'de, T, P: AsRef<Path>>(path: P) -> DeResult<DataWithHeader<T>>
 where T: de::Deserialize<'de> {
     let mut deserializer = Deserializer::from_file(path)?;
+    deserializer.skip_header()?;
     let result = T::deserialize(&mut deserializer)?;
     if let Ok(event) = deserializer.next() {
         if let Event::Eof = *event {
@@ -314,7 +314,6 @@ macro_rules! deserialize_type {
     ($deserialize: ident => $visit: ident, $true: expr) => {
         fn $deserialize<V>(self, visitor: V) -> DeResult<V::Value>
         where V: de::Visitor<'de> {
-            self.skip_header()?;
             match &*self.next()? {
                 Event::String(text) |
                 Event::Key(text) |
@@ -402,19 +401,16 @@ impl<'a, 'de, R: Read> SeqAccess<'de> for ArrayReader<'a, 'de, R> {
 
 impl<'de, 'a, R: Read> Deserializer<'de, R> {
     fn skip_header(&mut self) -> DeResult<()> {
-        if !self.is_plist_started {
-            if let Event::XmlVersion(xml_version) = &*self.next()? {
-                self.header.xml_version = xml_version.to_string();
-                if let Event::PlistStart { plist_version, gj_version } = &*self.next()? {
-                    self.header.plist_version = plist_version.to_string();
-                    self.header.gj_version = gj_version.to_string();
-                    self.is_plist_started = true;
-                } else {
-                    panic!(); // idk if it is reachable or not
-                }
+        if let Event::XmlVersion(xml_version) = &*self.next()? {
+            self.header.xml_version = xml_version.to_string();
+            if let Event::PlistStart { plist_version, gj_version } = &*self.next()? {
+                self.header.plist_version = plist_version.to_string();
+                self.header.gj_version = gj_version.to_string();
             } else {
-                return Err(DeError::ExpectedXmlVersion);
+                panic!(); // idk if it is reachable or not
             }
+        } else {
+            return Err(DeError::ExpectedXmlVersion);
         }
         Ok(())
     }
@@ -432,7 +428,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_any<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         match self.peek()? {
             Event::DictStart => {
                 self.next().unwrap();
@@ -464,7 +459,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_bool<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         if let Event::True = *self.next()? {
             visitor.visit_bool(true)
         } else {
@@ -492,13 +486,11 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_char<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_str<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         match &*self.next()? {
             Event::String(text) |
             Event::Key(text) |
@@ -513,25 +505,21 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_bytes<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_option<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         visitor.visit_some(self)
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
@@ -541,7 +529,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         visitor: V,
     ) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
@@ -551,13 +538,11 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         visitor: V,
     ) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_seq<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         if let Event::DictStart = *self.next()? {
             if let Event::Key(key) = &*self.next()? {
                 if key == "_isArr" {
@@ -572,7 +557,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_tuple<V>(self, len: usize, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
@@ -583,13 +567,11 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         visitor: V,
     ) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_map<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         if let Event::DictStart = *self.next()? {
             self.deserialize_map_content(visitor)
         } else { Err(DeError::Deserialization) }
@@ -602,7 +584,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         visitor: V,
     ) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         self.deserialize_map(visitor)
     }
 
@@ -613,19 +594,16 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         visitor: V,
     ) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         todo!()
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
         self.deserialize_str(visitor)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.skip_header()?;
-        self.deserialize_any(visitor) // no
+        self.deserialize_any(visitor) // no, its unoptimized
     }
 }
