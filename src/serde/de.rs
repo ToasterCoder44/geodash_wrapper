@@ -22,18 +22,18 @@ use quick_xml::{
 
 use super::error::{ DeError, DeResult };
 
-type DeserializerReader<'de, R> =
-XmlReader<
-    BufReader<
-        GzipReader<
-            Base64Reader<
-                'de,
-                GeneralPurpose,
-                XorReader<R>
-            >
+type DecryptedReader<'de, R> =
+BufReader<
+    GzipReader<
+        Base64Reader<
+            'de,
+            GeneralPurpose,
+            XorReader<R>
         >
     >
 >;
+
+type DecryptedXmlReader<'de, R> = XmlReader<DecryptedReader<'de, R>>;
 
 #[derive(Debug)]
 pub struct Header { // move to serde
@@ -49,7 +49,7 @@ pub struct DataWithHeader<T> {
 }
 
 pub struct Deserializer<'de, R: Read> {
-    reader: DeserializerReader<'de, R>,
+    reader: DecryptedXmlReader<'de, R>,
     buffer: Vec<u8>,
     header: Header,
     peeked_next: Option<Rc<Event>>,
@@ -57,13 +57,16 @@ pub struct Deserializer<'de, R: Read> {
 }
 
 impl<'de, R: Read> Deserializer<'de, R> {
-    pub fn from_reader(reader: R) -> DeResult<Self> {
+    fn decode(reader: R) -> DeResult<DecryptedReader<'de, R>> {
         let reader = XorReader::new(vec![11], reader);
         let reader = Base64Reader::new(reader, &URL_SAFE);
-        let reader = if let Ok(reader) = GzipReader::new(reader) { reader }
-        else { return Err(DeError::Read); };
-        let reader = XmlReader::from_reader(BufReader::new(reader));
+        if let Ok(reader) = GzipReader::new(reader) { Ok(BufReader::new(reader)) }
+        else { return Err(DeError::Read); }
+    }
 
+    pub fn from_reader(reader: R) -> DeResult<Self> {
+        let reader = Self::decode(reader)?;
+        let reader = XmlReader::from_reader(reader);
         Ok(Self {
             reader,
             buffer: vec![],
@@ -118,7 +121,7 @@ where T: de::Deserialize<'de> {
     else { Err(DeError::ExpectedEof) }
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 enum Event {
     XmlVersion(String),
     PlistStart {
@@ -607,3 +610,6 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
         self.deserialize_any(visitor) // no, its unoptimized
     }
 }
+
+#[cfg(test)]
+mod tests;
