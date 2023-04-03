@@ -2,7 +2,7 @@ use std::{
     path::Path,
     fs::File,
     io::{Read, BufReader},
-    rc::Rc
+    sync::Arc
 };
 use serde::{
     de::{self, MapAccess, SeqAccess},
@@ -10,9 +10,10 @@ use serde::{
 };
 
 use xorstream::Transformer as XorReader;
-use base64::read::DecoderReader as Base64Reader;
-use base64::engine::general_purpose::URL_SAFE;
-use base64::engine::GeneralPurpose;
+use base64::{
+    read::DecoderReader as Base64Reader,
+    engine::{GeneralPurpose, general_purpose::URL_SAFE}
+};
 use libflate::gzip::Decoder as GzipReader;
 use quick_xml::{
     Reader as XmlReader,
@@ -22,7 +23,7 @@ use quick_xml::{
 
 use super::error::{ DeError, DeResult };
 
-type DecryptedReader<'de, R> =
+type DecodedDataReader<'de, R> =
 BufReader<
     GzipReader<
         Base64Reader<
@@ -33,7 +34,7 @@ BufReader<
     >
 >;
 
-type DecryptedXmlReader<'de, R> = XmlReader<DecryptedReader<'de, R>>;
+type DecodedDataXmlReader<'de, R> = XmlReader<DecodedDataReader<'de, R>>;
 
 #[derive(Debug)]
 pub struct Header { // move to serde
@@ -49,15 +50,16 @@ pub struct DataWithHeader<T> {
 }
 
 pub struct Deserializer<'de, R: Read> {
-    reader: DecryptedXmlReader<'de, R>,
+    reader: DecodedDataXmlReader<'de, R>,
     buffer: Vec<u8>,
     header: Header,
-    peeked_next: Option<Rc<Event>>,
-    is_instant_dict_end: bool
+    peeked_next: Option<Arc<Event>>,
+    is_instant_dict_end: bool,
+    is_eof: bool
 }
 
 impl<'de, R: Read> Deserializer<'de, R> {
-    fn decode(reader: R) -> DeResult<DecryptedReader<'de, R>> {
+    fn decode(reader: R) -> DeResult<DecodedDataReader<'de, R>> {
         let reader = XorReader::new(vec![11], reader);
         let reader = Base64Reader::new(reader, &URL_SAFE);
         if let Ok(reader) = GzipReader::new(reader) { Ok(BufReader::new(reader)) }
@@ -76,7 +78,8 @@ impl<'de, R: Read> Deserializer<'de, R> {
                 gj_version: String::new()
             },
             peeked_next: None,
-            is_instant_dict_end: false
+            is_instant_dict_end: false,
+            is_eof: false
         })
     }
 }
@@ -149,7 +152,7 @@ enum PreEvent {
 macro_rules! save_next_peek {
     ($self: expr, $event: expr) => {
         {
-            $self.peeked_next = Some(Rc::new($event));
+            $self.peeked_next = Some(Arc::new($event));
             return Ok::<(), DeError>(())
         }
     };
@@ -165,7 +168,10 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
             self.is_instant_dict_end = false;
             save_next_peek!(self, Event::DictEnd);
         }
+        // deserializer always throws an error if an Eof event occured
+        if self.is_eof { panic!("Tried to read event after receiving EOF") }
         let mut expect = PreEvent::None;
+
         loop {
             match self.xml_next() {
                 Ok(event) => {
@@ -283,7 +289,10 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                                 }
                             }
                         }
-                        XmlEvent::Eof => { save_next_peek!(self, Event::Eof) }
+                        XmlEvent::Eof => {
+                            self.is_eof = true;
+                            save_next_peek!(self, Event::Eof)
+                        }
                         _ => { return Err(DeError::UnexpectedOtherXml) }
                     }
                 }
@@ -301,12 +310,12 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
         } else { unreachable!() }
     }
     
-    fn next(&'a mut self) -> DeResult<Rc<Event>> {
+    fn next(&'a mut self) -> DeResult<Arc<Event>> {
         if let None = self.peeked_next {
             self.save_next_peek()?;
         }
         if let Some(peeked) = &self.peeked_next {
-            let peeked = Rc::clone(&peeked);
+            let peeked = Arc::clone(&peeked);
             self.peeked_next = None;
             Ok(peeked)
         } else { unreachable!() }
