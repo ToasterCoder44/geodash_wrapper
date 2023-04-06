@@ -10,6 +10,7 @@ pub type DeResult<T> = std::result::Result<T, DeError>;
 
 #[derive(Debug)]
 pub enum DeError { // todo: precisify
+    Custom(String),
     Open,
     Read,
     XmlParse(XmlError),
@@ -29,8 +30,7 @@ pub enum DeError { // todo: precisify
 
 impl de::Error for DeError {
     fn custom<T: Display>(msg: T) -> Self {
-        eprintln!("{}", msg);
-        todo!();
+        Self::Custom(msg.to_string())
     }
 }
 

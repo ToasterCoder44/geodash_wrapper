@@ -2,15 +2,10 @@ use super::*;
 
 use std::io::Read;
 
-// use xorstream::Transformer as XorReader;
-// use base64::{write::EncoderWriter as Base64Writer, Engine};
+// use std::io::Write;
+// use base64::Engine;
 // use base64::engine::general_purpose::URL_SAFE;
-// use base64::engine::GeneralPurpose;
 // use libflate::gzip::Encoder as GzipWriter;
-// use quick_xml::{
-//     Writer as XmlWriter,
-//     Result as XmlResult
-// };
 
 // fn encode(input: &[u8]) -> Vec<u8> {
 //     let mut writer = GzipWriter::new(vec![]).unwrap();
@@ -30,14 +25,42 @@ struct TestSample {
 fn test_data<'a>() -> Vec<TestSample> {
     vec![
         TestSample {
-            encoded: br#"C?xBJImn@fZJJ:\FX|zJBJINyrBnZE[:DI=fANq<dIA:&=Y\<\inl|oTy]fhdoX?i;?jE^c[COe\2zobS}{8;}QE_CMxYLB@E8ZbHd9r;BSZe2A}ll3o>bC>S|JJJJ66"#.to_vec(),
-            decoded: br#"<?xml version="1.0"?><plist version="1.0" gjver="2.0"><dict><k>key</k><r>1.2</r></dict></plist>"#.to_vec(),
+            encoded: b"C?xBJB<ZGfZJJ:SE^Z=HFIJN;@x;[ZH]N}:jcl\x7f?HjFE\\\\`G9j8L?:}@M8&<i>BQfe?{ff3Z>_\\[\x7f~3~olA\x7f`i\\h:hq}&dT\\:s};?fhIGQO|bDZ\\`@O}TNIDo~]hLa@~myc]>]9:HDn>IRy<@bNQ8}X_rHeBCR9~GnF[f@J<[{RJJJJ6".to_vec(),
+            decoded: br#"<?xml version="1.0"?><plist version="1.0" gjver="2.0"><dict><k>real</k><r>1.23</r><k>int</k><i>52363</i><k>string</k><s>Lorem ipsum</s></dict></plist>"#.to_vec(),
             valid_events: vec![
                 Event::XmlVersion(String::from("1.0")),
                 Event::PlistStart { plist_version: String::from("1.0"), gj_version: String::from("2.0") },
                 Event::DictStart,
-                Event::Key(String::from("key")),
-                Event::Real(String::from("1.2")),
+                Event::Key(String::from("real")),
+                Event::Real(String::from("1.23")),
+                Event::Key(String::from("int")),
+                Event::Integer(String::from("52363")),
+                Event::Key(String::from("string")),
+                Event::String(String::from("Lorem ipsum")),
+                Event::DictEnd,
+                Event::Eof
+            ],
+            is_valid: true
+        },
+        TestSample {
+            encoded: b"C?xBJL[ZGfZJJ;9@XZyJBIJN}rGqlLr8|LY3_IGHIOo^sDn<?FM_os\\MFfxg;~xO\\8[I}f|lHQ8bNLo<l[a&r~9mZ[a|CZeSF_9eJzOALAQGJJJJ".to_vec(),
+            decoded: br#"<?xml version="1.0"?><plist version="1.2" gjver="1.9"><dict></dict></plist>"#.to_vec(),
+            valid_events: vec![
+                Event::XmlVersion(String::from("1.0")),
+                Event::PlistStart { plist_version: String::from("1.2"), gj_version: String::from("1.9") },
+                Event::DictStart,
+                Event::DictEnd,
+                Event::Eof
+            ],
+            is_valid: true
+        },
+        TestSample {
+            encoded: b"C?xBJNSZGfZJJ;\\@\\|zJBIJJy<GxJoZ&c\\;2_N]x\\Bf@nC|m[T<EOND~}c<@MQ[38?>L\\SYF|^}@z9<@BEs[23N\\f^?>Fflf[^2~OIb|_NRJJJJ6".to_vec(),
+            decoded: br#"<?xml version="0.9"?><plist version="1.0" gjver="1.9"><dict /></plist>"#.to_vec(),
+            valid_events: vec![
+                Event::XmlVersion(String::from("0.9")),
+                Event::PlistStart { plist_version: String::from("1.0"), gj_version: String::from("1.9") },
+                Event::DictStart,
                 Event::DictEnd,
                 Event::Eof
             ],
@@ -46,12 +69,19 @@ fn test_data<'a>() -> Vec<TestSample> {
     ]
 }
 
+// #[test]
+// fn _temp() {
+//     let x = encode(br#"something, xml"#);
+//     println!("###::{:?}::###", from_utf8(&x).unwrap());
+// }
+
 #[test]
 fn decodes_correctly() {
     for sample in test_data() {
         let mut decoded_by_func = vec![];
-        Deserializer::decode(&sample.encoded[..]).unwrap().read_to_end(&mut decoded_by_func).unwrap();
-        assert_eq!(sample.decoded, &decoded_by_func[..]);
+        let mut reader = Deserializer::decode(&sample.encoded[..]).unwrap();
+        reader.read_to_end(&mut decoded_by_func).unwrap();
+        assert_eq!(sample.decoded, decoded_by_func);
     }
 }
 

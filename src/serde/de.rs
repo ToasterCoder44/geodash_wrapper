@@ -24,17 +24,20 @@ use quick_xml::{
 use super::error::{ DeError, DeResult };
 
 type DecodedDataReader<'de, R> =
-BufReader<
     GzipReader<
         Base64Reader<
             'de,
             GeneralPurpose,
             XorReader<R>
         >
+    >;
+
+type DecodedDataXmlReader<'de, R> =
+XmlReader<
+    BufReader<
+        DecodedDataReader<'de, R>
     >
 >;
-
-type DecodedDataXmlReader<'de, R> = XmlReader<DecodedDataReader<'de, R>>;
 
 #[derive(Debug)]
 pub struct Header { // move to serde
@@ -62,13 +65,13 @@ impl<'de, R: Read> Deserializer<'de, R> {
     fn decode(reader: R) -> DeResult<DecodedDataReader<'de, R>> {
         let reader = XorReader::new(vec![11], reader);
         let reader = Base64Reader::new(reader, &URL_SAFE);
-        if let Ok(reader) = GzipReader::new(reader) { Ok(BufReader::new(reader)) }
+        if let Ok(reader) = GzipReader::new(reader) { Ok(reader) }
         else { return Err(DeError::Read); }
     }
 
     pub fn from_reader(reader: R) -> DeResult<Self> {
         let reader = Self::decode(reader)?;
-        let reader = XmlReader::from_reader(reader);
+        let reader = XmlReader::from_reader(BufReader::new(reader));
         Ok(Self {
             reader,
             buffer: vec![],
@@ -257,7 +260,7 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                         XmlEvent::Empty(tag) => {
                             if let PreEvent::None = expect {
                                 match tag.name().into_inner() {
-                                    b"d" => {
+                                    b"d" | b"dict" => {
                                         self.is_instant_dict_end = true;
                                         save_next_peek!(self, Event::DictStart);
                                     }
