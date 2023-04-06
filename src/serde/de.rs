@@ -56,7 +56,7 @@ pub struct Deserializer<'de, R: Read> {
     reader: DecodedDataXmlReader<'de, R>,
     buffer: Vec<u8>,
     header: Header,
-    peeked_next: Option<Arc<Event>>,
+    peeked_next: Option<Arc<DeEvent>>,
     is_instant_dict_end: bool,
     is_eof: bool
 }
@@ -65,8 +65,10 @@ impl<'de, R: Read> Deserializer<'de, R> {
     fn decode(reader: R) -> DeResult<DecodedDataReader<'de, R>> {
         let reader = XorReader::new(vec![11], reader);
         let reader = Base64Reader::new(reader, &URL_SAFE);
-        if let Ok(reader) = GzipReader::new(reader) { Ok(reader) }
-        else { return Err(DeError::Read); }
+        match GzipReader::new(reader) {
+            Ok(reader) => Ok(reader),
+            Err(err) => Err(DeError::Io(err))
+        }
     }
 
     pub fn from_reader(reader: R) -> DeResult<Self> {
@@ -89,9 +91,10 @@ impl<'de, R: Read> Deserializer<'de, R> {
 
 impl<'de> Deserializer<'de, File> {
     pub fn from_file<P: AsRef<Path>>(path: P) -> DeResult<Self> {
-        if let Ok(file) = File::open(path) {
-            Self::from_reader(file)
-        } else { Err(DeError::Open) }
+        match File::open(path) {
+            Ok(file) => Self::from_reader(file),
+            Err(err) => Err(DeError::Io(err))
+        }
     }
 }
 
@@ -101,7 +104,7 @@ where T: de::Deserialize<'de> {
     deserializer.skip_header()?;
     let result = T::deserialize(&mut deserializer)?;
     if let Ok(event) = deserializer.next() {
-        if let Event::Eof = *event {
+        if let DeEvent::Eof = *event {
             Ok(DataWithHeader {
                 t: result,
                 header: deserializer.header
@@ -117,7 +120,7 @@ where T: de::Deserialize<'de> {
     deserializer.skip_header()?;
     let result = T::deserialize(&mut deserializer)?;
     if let Ok(event) = deserializer.next() {
-        if let Event::Eof = *event {
+        if let DeEvent::Eof = *event {
             Ok(DataWithHeader {
                 t: result,
                 header: deserializer.header
@@ -128,7 +131,7 @@ where T: de::Deserialize<'de> {
 }
 
 #[derive(PartialEq, Debug)]
-enum Event {
+enum DeEvent {
     XmlVersion(String),
     PlistStart {
         plist_version: String,
@@ -144,7 +147,7 @@ enum Event {
     Eof
 }
 
-enum PreEvent {
+enum DeEventExpected {
     None,
     Key,
     String,
@@ -153,12 +156,10 @@ enum PreEvent {
 }
 
 macro_rules! save_next_peek {
-    ($self: expr, $event: expr) => {
-        {
-            $self.peeked_next = Some(Arc::new($event));
-            return Ok::<(), DeError>(())
-        }
-    };
+    ($self: expr, $event: expr) => {{
+        $self.peeked_next = Some(Arc::new($event));
+        return Ok::<(), DeError>(())
+    }};
 }
 
 impl<'a, 'de, R: Read> Deserializer<'de, R> {
@@ -169,11 +170,11 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
     fn save_next_peek(&'a mut self) -> DeResult<()> {
         if self.is_instant_dict_end {
             self.is_instant_dict_end = false;
-            save_next_peek!(self, Event::DictEnd);
+            save_next_peek!(self, DeEvent::DictEnd);
         }
         // deserializer always throws an error if an Eof event occured
         if self.is_eof { panic!("Tried to read event after receiving EOF") }
-        let mut expect = PreEvent::None;
+        let mut expect = DeEventExpected::None;
 
         loop {
             match self.xml_next() {
@@ -182,13 +183,13 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                         XmlEvent::Decl(decl) => {
                             if let Ok(version) = decl.version() {
                                 if let Ok(version) = String::from_utf8(version.to_vec()) {
-                                    save_next_peek!(self, Event::XmlVersion(version))
+                                    save_next_peek!(self, DeEvent::XmlVersion(version))
                                 }
                             }
                             return Err(DeError::NoXmlVersionInfo);
                         }
                         XmlEvent::Start(tag) => {
-                            if let PreEvent::None = expect {
+                            if let DeEventExpected::None = expect {
                                 match tag.name().into_inner() {
                                     b"plist" => {
                                         let mut plist_version: Option<String> = None;
@@ -234,58 +235,58 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                                             None => { return Err(DeError::ExpectedPlistVersion) },
                                         };
 
-                                        save_next_peek!(self, Event::PlistStart {
+                                        save_next_peek!(self, DeEvent::PlistStart {
                                             plist_version,
                                             gj_version
                                         })
                                     }
-                                    b"d" | b"dict" => { save_next_peek!(self, Event::DictStart) }
-                                    b"k" => { expect = PreEvent::Key }
-                                    b"s" => { expect = PreEvent::String }
-                                    b"i" => { expect = PreEvent::Integer }
-                                    b"r" => { expect = PreEvent::Real }
+                                    b"d" | b"dict" => { save_next_peek!(self, DeEvent::DictStart) }
+                                    b"k" => { expect = DeEventExpected::Key }
+                                    b"s" => { expect = DeEventExpected::String }
+                                    b"i" => { expect = DeEventExpected::Integer }
+                                    b"r" => { expect = DeEventExpected::Real }
                                     _ => { return Err(DeError::UnknownXmlTag) }
                                 }
                             } else { return Err(DeError::UnexpectedXmlTag) }
                         }
                         XmlEvent::End(tag) => {
-                            if let PreEvent::None = expect {
+                            if let DeEventExpected::None = expect {
                                 match tag.name().into_inner() {
                                     b"plist" | b"k" | b"s" | b"i" | b"r" => {}
-                                    b"d" | b"dict" => { save_next_peek!(self, Event::DictEnd) }
+                                    b"d" | b"dict" => { save_next_peek!(self, DeEvent::DictEnd) }
                                     _ => { return Err(DeError::UnknownXmlTag) }
                                 }
                             } else { return Err(DeError::UnexpectedXmlTag) }
                         }
                         XmlEvent::Empty(tag) => {
-                            if let PreEvent::None = expect {
+                            if let DeEventExpected::None = expect {
                                 match tag.name().into_inner() {
                                     b"d" | b"dict" => {
                                         self.is_instant_dict_end = true;
-                                        save_next_peek!(self, Event::DictStart);
+                                        save_next_peek!(self, DeEvent::DictStart);
                                     }
-                                    b"t" => { save_next_peek!(self, Event::True) }
+                                    b"t" => { save_next_peek!(self, DeEvent::True) }
                                     _ => { return Err(DeError::UnknownXmlTag) }
                                 }
                             } else { return Err(DeError::UnexpectedXmlTag); }
                         }
                         XmlEvent::Text(text) => {
-                            if let PreEvent::None = expect { return Err(DeError::UnexpectedXmlText) }
+                            if let DeEventExpected::None = expect { return Err(DeError::UnexpectedXmlText) }
                             else {
                                 match text.unescape() {
                                     Ok(text) => match expect {
-                                        PreEvent::None => { unreachable!() }
-                                        PreEvent::Key => {
-                                            save_next_peek!(self, Event::Key(text.to_string()))
+                                        DeEventExpected::None => { unreachable!() }
+                                        DeEventExpected::Key => {
+                                            save_next_peek!(self, DeEvent::Key(text.to_string()))
                                         }
-                                        PreEvent::String => {
-                                            save_next_peek!(self, Event::String(text.to_string()))
+                                        DeEventExpected::String => {
+                                            save_next_peek!(self, DeEvent::String(text.to_string()))
                                         }
-                                        PreEvent::Integer => {
-                                            save_next_peek!(self, Event::Integer(text.to_string()))
+                                        DeEventExpected::Integer => {
+                                            save_next_peek!(self, DeEvent::Integer(text.to_string()))
                                         }
-                                        PreEvent::Real => {
-                                            save_next_peek!(self, Event::Real(text.to_string()))
+                                        DeEventExpected::Real => {
+                                            save_next_peek!(self, DeEvent::Real(text.to_string()))
                                         }
                                     }
                                     Err(err) => { return Err(DeError::XmlParse(err)) }
@@ -294,7 +295,7 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
                         }
                         XmlEvent::Eof => {
                             self.is_eof = true;
-                            save_next_peek!(self, Event::Eof)
+                            save_next_peek!(self, DeEvent::Eof)
                         }
                         _ => { return Err(DeError::UnexpectedOtherXml) }
                     }
@@ -304,7 +305,7 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
         }
     }
 
-    fn peek(&'a mut self) -> DeResult<&Event> {
+    fn peek(&'a mut self) -> DeResult<&DeEvent> {
         if let None = self.peeked_next {
             self.save_next_peek()?;
         }
@@ -313,7 +314,7 @@ impl<'a, 'de, R: Read> Deserializer<'de, R> {
         } else { unreachable!() }
     }
     
-    fn next(&'a mut self) -> DeResult<Arc<Event>> {
+    fn next(&'a mut self) -> DeResult<Arc<DeEvent>> {
         if let None = self.peeked_next {
             self.save_next_peek()?;
         }
@@ -330,14 +331,14 @@ macro_rules! deserialize_type {
         fn $deserialize<V>(self, visitor: V) -> DeResult<V::Value>
         where V: de::Visitor<'de> {
             match &*self.next()? {
-                Event::String(text) |
-                Event::Key(text) |
-                Event::Integer(text) |
-                Event::Real(text) => {
+                DeEvent::String(text) |
+                DeEvent::Key(text) |
+                DeEvent::Integer(text) |
+                DeEvent::Real(text) => {
                     if let Ok(parsed) = text.parse() { visitor.$visit(parsed) }
                     else { Err(DeError::Deserialization) }
                 }
-                Event::True => { visitor.$visit($true) }
+                DeEvent::True => { visitor.$visit($true) }
                 _ => Err(DeError::Deserialization)
             }
         }
@@ -360,8 +361,8 @@ impl<'a, 'de, R: Read> MapAccess<'de> for DictReader<'a, 'de, R> {
     fn next_key_seed<K>(&mut self, seed: K) -> DeResult<Option<K::Value>>
     where K: de::DeserializeSeed<'de> {
         match self.de.peek()? {
-            Event::DictEnd => Ok(None),
-            Event::Key(_) => Ok(Some(seed.deserialize(&mut *self.de)?)),
+            DeEvent::DictEnd => Ok(None),
+            DeEvent::Key(_) => Ok(Some(seed.deserialize(&mut *self.de)?)),
             _ => Err(DeError::Deserialization)
         }
     }
@@ -369,11 +370,11 @@ impl<'a, 'de, R: Read> MapAccess<'de> for DictReader<'a, 'de, R> {
     fn next_value_seed<V>(&mut self, seed: V) -> DeResult<V::Value>
     where V: de::DeserializeSeed<'de> {
         match self.de.peek()? {
-            Event::DictStart |
-            Event::String(_) |
-            Event::Integer(_) |
-            Event::Real(_) |
-            Event::True => Ok(seed.deserialize(&mut *self.de)?),
+            DeEvent::DictStart |
+            DeEvent::String(_) |
+            DeEvent::Integer(_) |
+            DeEvent::Real(_) |
+            DeEvent::True => Ok(seed.deserialize(&mut *self.de)?),
             _ => Err(DeError::Deserialization)
         }
     }
@@ -396,15 +397,15 @@ impl<'a, 'de, R: Read> SeqAccess<'de> for ArrayReader<'a, 'de, R> {
     fn next_element_seed<T>(&mut self, seed: T) -> DeResult<Option<T::Value>>
     where T: de::DeserializeSeed<'de> {
         match &*self.de.next()? {
-            Event::DictEnd => Ok(None),
-            Event::Key(key) => {
+            DeEvent::DictEnd => Ok(None),
+            DeEvent::Key(key) => {
                 if *key == String::from("k_") + &self.cur_index.to_string() {
                     match self.de.peek()? {
-                        Event::DictStart |
-                        Event::String(_) |
-                        Event::Integer(_) |
-                        Event::Real(_) |
-                        Event::True => {self.cur_index+=1;Ok(Some(seed.deserialize(&mut *self.de)?))},
+                        DeEvent::DictStart |
+                        DeEvent::String(_) |
+                        DeEvent::Integer(_) |
+                        DeEvent::Real(_) |
+                        DeEvent::True => {self.cur_index+=1;Ok(Some(seed.deserialize(&mut *self.de)?))},
                         _ => Err(DeError::Deserialization)
                     }
                 } else { Err(DeError::Deserialization) }
@@ -416,9 +417,9 @@ impl<'a, 'de, R: Read> SeqAccess<'de> for ArrayReader<'a, 'de, R> {
 
 impl<'de, 'a, R: Read> Deserializer<'de, R> {
     fn skip_header(&mut self) -> DeResult<()> {
-        if let Event::XmlVersion(xml_version) = &*self.next()? {
+        if let DeEvent::XmlVersion(xml_version) = &*self.next()? {
             self.header.xml_version = xml_version.to_string();
-            if let Event::PlistStart { plist_version, gj_version } = &*self.next()? {
+            if let DeEvent::PlistStart { plist_version, gj_version } = &*self.next()? {
                 self.header.plist_version = plist_version.to_string();
                 self.header.gj_version = gj_version.to_string();
             } else {
@@ -433,7 +434,7 @@ impl<'de, 'a, R: Read> Deserializer<'de, R> {
     fn deserialize_map_content<V>(&mut self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
         let map = visitor.visit_map(DictReader::new(self));
-        if let Event::DictEnd = *self.next().unwrap() { map }
+        if let DeEvent::DictEnd = *self.next().unwrap() { map }
         else { unreachable!() }
     }
 }
@@ -444,14 +445,14 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
     fn deserialize_any<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
         match self.peek()? {
-            Event::DictStart => {
+            DeEvent::DictStart => {
                 self.next().unwrap();
                 match self.peek()? {
-                    Event::Key(key) => {
+                    DeEvent::Key(key) => {
                         if key == "_isArr" {
                             self.next().unwrap();
                             match *self.next()? {
-                                Event::True => visitor.visit_seq(ArrayReader::new(self)),
+                                DeEvent::True => visitor.visit_seq(ArrayReader::new(self)),
                                 _ => Err(DeError::Deserialization)
                             }
 
@@ -459,22 +460,22 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
                             self.deserialize_map_content(visitor)
                         }
                     }
-                    Event::DictEnd => self.deserialize_map_content(visitor),
+                    DeEvent::DictEnd => self.deserialize_map_content(visitor),
                     _ => Err(DeError::Deserialization)
                 }
             }
-            Event::String(_) => self.deserialize_str(visitor),
-            Event::Key(_) => self.deserialize_str(visitor),
-            Event::Integer(_) => self.deserialize_i32(visitor),
-            Event::Real(_) => self.deserialize_f32(visitor),
-            Event::True => self.deserialize_bool(visitor),
+            DeEvent::String(_) => self.deserialize_str(visitor),
+            DeEvent::Key(_) => self.deserialize_str(visitor),
+            DeEvent::Integer(_) => self.deserialize_i32(visitor),
+            DeEvent::Real(_) => self.deserialize_f32(visitor),
+            DeEvent::True => self.deserialize_bool(visitor),
             _ => Err(DeError::Deserialization)
         }
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        if let Event::True = *self.next()? {
+        if let DeEvent::True = *self.next()? {
             visitor.visit_bool(true)
         } else {
             Err(DeError::Deserialization)
@@ -507,11 +508,11 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
     fn deserialize_str<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
         match &*self.next()? {
-            Event::String(text) |
-            Event::Key(text) |
-            Event::Integer(text) |
-            Event::Real(text) => { visitor.visit_str(&text[..]) }
-            Event::True => { visitor.visit_str("true") }
+            DeEvent::String(text) |
+            DeEvent::Key(text) |
+            DeEvent::Integer(text) |
+            DeEvent::Real(text) => { visitor.visit_str(&text[..]) }
+            DeEvent::True => { visitor.visit_str("true") }
             _ => Err(DeError::Deserialization)
         }
     }
@@ -558,11 +559,11 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_seq<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        if let Event::DictStart = *self.next()? {
-            if let Event::Key(key) = &*self.next()? {
+        if let DeEvent::DictStart = *self.next()? {
+            if let DeEvent::Key(key) = &*self.next()? {
                 if key == "_isArr" {
                     match *self.next()? {
-                        Event::True => visitor.visit_seq(ArrayReader::new(self)),
+                        DeEvent::True => visitor.visit_seq(ArrayReader::new(self)),
                         _ => Err(DeError::Deserialization)
                     }
                 } else { Err(DeError::Deserialization) }
@@ -587,7 +588,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_map<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        if let Event::DictStart = *self.next()? {
+        if let DeEvent::DictStart = *self.next()? {
             self.deserialize_map_content(visitor)
         } else { Err(DeError::Deserialization) }
     }
@@ -619,7 +620,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<'de, R> {
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> DeResult<V::Value>
     where V: de::Visitor<'de> {
-        self.deserialize_any(visitor) // no, its unoptimized
+        self.deserialize_any(visitor)
     }
 }
 

@@ -1,4 +1,8 @@
-use std::fmt::{self, Display};
+use std::{
+    error::Error,
+    fmt::{self, Display},
+    io::Error as IoError
+};
 use serde::{ser, de};
 
 use quick_xml::{
@@ -9,10 +13,9 @@ use quick_xml::{
 pub type DeResult<T> = std::result::Result<T, DeError>;
 
 #[derive(Debug)]
-pub enum DeError { // todo: precisify
+pub enum DeError {
     Custom(String),
-    Open,
-    Read,
+    Io(IoError),
     XmlParse(XmlError),
     XmlAttrParse(XmlAttrError),
     NoXmlVersionInfo,
@@ -40,4 +43,4 @@ impl Display for DeError {
     }
 }
 
-impl std::error::Error for DeError {}
+impl Error for DeError {}
