@@ -49,7 +49,8 @@ pub type SerResult<T> = std::result::Result<T, SerError>;
 
 #[derive(Debug)]
 pub enum SerError {
-    Custom(String)
+    Custom(String),
+    XmlParse(XmlError)
 }
 
 impl ser::Error for SerError {

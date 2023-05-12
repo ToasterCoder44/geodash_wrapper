@@ -1,19 +1,38 @@
 use std::io::Cursor;
-use serde::ser;
+use serde::{ser, serde_if_integer128};
 use quick_xml::{
-    Writer as XMLWriter,
-    events::{self as xml_events, Event as XMLEvent}
+    Writer as XmlWriter,
+    events::{self as xml_events, Event as XmlEvent}
 };
 use super::error::{ SerError, SerResult };
 
 pub struct Serializer {
-    pub writer: XMLWriter<Cursor<Vec<u8>>> // temporarily public
+    pub writer: XmlWriter<Cursor<Vec<u8>>> // temporarily public
 }
 
 impl Serializer {
     pub fn new() -> Self { // temporarily public
-        Self { writer: XMLWriter::new(Cursor::new(vec![])) }
+        Self { writer: XmlWriter::new(Cursor::new(vec![])) }
     }
+}
+
+macro_rules! write_event {
+    ($writer: expr, $event: expr) => {
+        if let Err(err) = $writer.write_event($event) {
+            return Err(SerError::XmlParse(err))
+        }
+    };
+}
+
+macro_rules! serialize_type {
+    ($serialize: ident => $value_type: ident, $tag: expr) => {
+        fn $serialize(self, v: $value_type) -> SerResult<()> {
+            write_event!(self.writer, XmlEvent::Start(xml_events::BytesStart::new($tag)));
+            write_event!(self.writer, XmlEvent::Text(xml_events::BytesText::new(&v.to_string())));
+            write_event!(self.writer, XmlEvent::End(xml_events::BytesEnd::new($tag)));
+            Ok(())
+        }
+    };
 }
 
 impl<'a> ser::Serializer for &'a mut Serializer {
@@ -28,51 +47,27 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_i8(self, v: i8) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_i16(self, v: i16) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_i32(self, v: i32) -> SerResult<()> {
-        self.writer.write_event(XMLEvent::Start(xml_events::BytesStart::new("i")));
-        self.writer.write_event(XMLEvent::Text(xml_events::BytesText::new(&v.to_string())));
-        self.writer.write_event(XMLEvent::End(xml_events::BytesEnd::new("i")));
+        write_event!(self.writer, XmlEvent::Empty(xml_events::BytesStart::new("i")));
         Ok(())
     }
 
-    fn serialize_i64(self, v: i64) -> SerResult<()> {
-        todo!()
+    serialize_type!(serialize_i8 => i8, "i");
+    serialize_type!(serialize_i16 => i16, "i");
+    serialize_type!(serialize_i32 => i32, "i");
+    serialize_type!(serialize_i64 => i64, "i");
+
+    serialize_type!(serialize_u8 => u8, "i");
+    serialize_type!(serialize_u16 => u16, "i");
+    serialize_type!(serialize_u32 => u32, "i");
+    serialize_type!(serialize_u64 => u64, "i");
+
+    serde_if_integer128! {
+        serialize_type!(serialize_u128 => u128, "i");
+        serialize_type!(serialize_i128 => i128, "i");
     }
 
-    fn serialize_u8(self, v: u8) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_u16(self, v: u16) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_u32(self, v: u32) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_u64(self, v: u64) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_f32(self, v: f32) -> SerResult<()> {
-        todo!()
-    }
-
-    fn serialize_f64(self, v: f64) -> SerResult<()> {
-        todo!()
-    }
+    serialize_type!(serialize_f32 => f32, "r");
+    serialize_type!(serialize_f64 => f64, "r");
 
     fn serialize_char(self, v: char) -> SerResult<()> {
         todo!()

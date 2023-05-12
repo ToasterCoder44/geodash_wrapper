@@ -25,6 +25,6 @@ fn main() {
     println!("{:#?}", gdb);
 
     let mut ser = gd_serde::ser::Serializer::new();
-    (64).serialize(&mut ser).unwrap();
+    (5346.32357328946).serialize(&mut ser).unwrap();
     println!("{}", String::from_utf8(ser.writer.into_inner().into_inner()).unwrap());
 }
