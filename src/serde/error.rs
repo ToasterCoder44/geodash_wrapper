@@ -44,3 +44,24 @@ impl Display for DeError {
 }
 
 impl Error for DeError {}
+
+pub type SerResult<T> = std::result::Result<T, SerError>;
+
+#[derive(Debug)]
+pub enum SerError {
+    Custom(String)
+}
+
+impl ser::Error for SerError {
+    fn custom<T: Display>(msg: T) -> Self {
+        Self::Custom(msg.to_string())
+    }
+}
+
+impl Display for SerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        todo!()
+    }
+}
+
+impl Error for SerError {}
